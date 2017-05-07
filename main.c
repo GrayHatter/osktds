@@ -3,6 +3,9 @@
  * I got sick and tired of using my surface without a real on screen interface when my keyboard isn't attached.
  * So I whipped this up in about a day, enjoy!
  * -- GrayHatter, (Probably)
+ *
+ *  clang -fsanitize=address -g -o osktds main.c -lX11 -lXrender -lXtst -lXi
+ *
  */
 
 #include "panel.h"
@@ -12,12 +15,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #include <X11/cursorfont.h>
 #include <X11/extensions/Xrender.h>
 // #include <X11/extensions/XShm.h>
 #include <X11/extensions/XTest.h>
+#include <X11/extensions/XInput2.h>
+
 #include <X11/X.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
@@ -104,6 +110,34 @@ static void draw_box_fill(int x, int y, int w, int h, uint32_t color)
     XFillRectangle(display, pmap, gc, x, y, w, h);
 }
 
+static bool osk_hide(PANEL *p)
+{
+    (void)p;
+    if (osk.hidden) {
+        XResizeWindow(display, osk.window, 2160, 560);
+    } else {
+        XResizeWindow(display, osk.window, 40, 80);
+    }
+    osk.hidden = !osk.hidden;
+    return true;
+}
+PANEL btn_hide = {
+    .x = 0,
+    .y = 0,
+    .w = 80,
+    .h = 80,
+
+    .type = OSKTDS_PANEL_TYPE_BUTTON,
+    .enabled = true,
+    .draw_func = NULL,
+    .mdown_func = osk_hide,
+
+    .child = (PANEL*[]) {
+        NULL,
+    }
+
+};
+
 static void pdraw_sidebar_l(PANEL *p, int x, int y, int w, int h)
 {
     draw_box(x,      y, w, 80, ~0);
@@ -118,6 +152,60 @@ PANEL sidebar_l = {
     .type = 0,
     .enabled = true,
     .draw_func = pdraw_sidebar_l,
+
+    .child = (PANEL*[]) {
+        &btn_hide,
+        NULL,
+    }
+};
+
+static bool osk_jump(Window w, bool up)
+{
+    osk.docked = true;
+    if (up) {
+        osk.top = true;
+        XMoveWindow(display, w, 0, 0);
+    } else {
+        osk.top = false;
+        XMoveWindow(display, w, 0, 1440 - osk.h);
+    }
+    return true;
+}
+
+static bool osk_jump_up(PANEL *w)
+{
+    return osk_jump(osk.window, 1);
+}
+
+static bool osk_jump_dn(PANEL *w)
+{
+    return osk_jump(osk.window, 0);
+}
+
+PANEL jump_btn_up = {
+    .x = 0,
+    .y = 0,
+    .w = 80,
+    .h = 280,
+
+    .type = 0,
+    .enabled = true,
+    .draw_func = NULL,
+    .mdown_func = osk_jump_up,
+
+    .child = (PANEL*[]) {
+        NULL,
+    }
+}, jump_btn_dn = {
+    .x = 0,
+    .y = 280,
+    .w = 80,
+    .h = 280,
+
+    .type = 0,
+    .enabled = true,
+    .draw_func = NULL,
+    .mdown_func = osk_jump_dn,
 
     .child = (PANEL*[]) {
         NULL,
@@ -143,6 +231,8 @@ PANEL sidebar_r = {
     .draw_func = pdraw_sidebar_r,
 
     .child = (PANEL*[]) {
+        &jump_btn_up,
+        &jump_btn_dn,
         NULL,
     }
 };
@@ -414,29 +504,7 @@ static void draw_pixel(int x, int y, uint32_t color)
     XDrawLine(display, pmap, gc, x, y, x, y);
 }
 
-static void osk_jump(Window w, bool up)
-{
-    osk.docked = true;
-    if (up) {
-        osk.top = true;
-        XMoveWindow(display, w, 0, 0);
-    } else {
-        osk.top = false;
-        XMoveWindow(display, w, 0, 1440 - osk.h);
-    }
-}
-
-static void osk_hide(Window w)
-{
-    if (osk.hidden) {
-        XResizeWindow(display, w, 2160, 560);
-    } else {
-        XResizeWindow(display, w, 80, 80);
-    }
-    osk.hidden = !osk.hidden;
-}
-
-static bool mouse_down_row(PANEL *row)
+static bool mouse_down_row(PANEL *row, int touch_id)
 {
     if (row->child) {
         PANEL *key = NULL;
@@ -455,7 +523,7 @@ static bool mouse_down_row(PANEL *row)
     return false;
 }
 
-static bool mouse_down_core(PANEL *p)
+static bool mouse_down_core(PANEL *p, int touch_id)
 {
     if (!p->enabled || !p->m_over) {
         return false;
@@ -465,14 +533,14 @@ static bool mouse_down_core(PANEL *p)
         PANEL **children = p->child;
         while (*children) {
             PANEL *child = *children++;
-            if (mouse_down_core(child)) {
+            if (mouse_down_core(child, touch_id)) {
                 return true;
             }
         }
     }
 
     if (p->type == OSKTDS_PANEL_TYPE_KEY_ROW) {
-        return mouse_down_row(p);
+        return mouse_down_row(p, touch_id);
     }
 
     if (p->mdown_func) {
@@ -482,12 +550,17 @@ static bool mouse_down_core(PANEL *p)
     return false;
 }
 
-static void mouse_down(PANEL *p)
+static void mouse_down(PANEL *p, int touch_id)
 {
-    mouse_down_core(p);
+    mouse_down_core(p, touch_id);
 }
 
-static void mouse_move_row(PANEL *row, int x, int y, int w, int h, int mx, int my)
+static void mouse_up(PANEL *p, int touch_id)
+{
+    // mouse_up_core(p, touch_id);
+}
+
+static void mouse_move_row(PANEL *row, int x, int y, int w, int h, int mx, int my, int touch_id)
 {
     if (row->child) {
         int real_w = x;
@@ -496,10 +569,12 @@ static void mouse_move_row(PANEL *row, int x, int y, int w, int h, int mx, int m
         while (*keys) {
             key = *keys++;
             key->m_over = false;
+            key->m_over_tid = 0;
             real_w += key->w;
 
             if (IN_RECT(mx, my, x, y, real_w, y + key->h)) {
                 key->m_over = true;
+                key->m_over_tid = touch_id;
             }
             real_w += 10;
             x = real_w;
@@ -507,7 +582,7 @@ static void mouse_move_row(PANEL *row, int x, int y, int w, int h, int mx, int m
     }
 }
 
-static void mouse_move_core(PANEL *p, int x, int y, int w, int h, int mx, int my)
+static void mouse_move_core(PANEL *p, int x, int y, int w, int h, int mx, int my, int touch_id)
 {
     if (!p->enabled || p->type == OSKTDS_PANEL_TYPE_KEY) {
         return;
@@ -525,28 +600,28 @@ static void mouse_move_core(PANEL *p, int x, int y, int w, int h, int mx, int my
             int real_w = child->w > 0 ? child->w + real_x : w - abs(child->w);
             int real_h = child->h > 0 ? child->h + real_y : h - abs(child->h);
 
-            mouse_move_core(child, real_x, real_y, real_w, real_h, mx, my);
+            mouse_move_core(child, real_x, real_y, real_w, real_h, mx, my, touch_id);
 
             if (IN_RECT(mx, my, real_x, real_y, real_w, real_h)) {
                 child->m_over = true;
             }
 
             if (p->type == OSKTDS_PANEL_TYPE_KEY_ROW) {
-                mouse_move_row(p, real_x, real_y, real_w, real_h, mx, my);
+                mouse_move_row(p, real_x, real_y, real_w, real_h, mx, my, touch_id);
             }
         }
     }
 }
 
-static void mouse_move(PANEL *p, int x, int y, int w, int h, int mx, int my)
+static void mouse_move(PANEL *p, int x, int y, int w, int h, int mx, int my, int touch_id)
 {
-    mouse_move_core(p, x, y, w, h, mx, my);
+    mouse_move_core(p, x, y, w, h, mx, my, touch_id);
     p->m_over = true; // We don't care when it's not
 }
 
-static int xevent(XEvent ev)
+static int xevent(XEvent *ev)
 {
-    switch (ev.type) {
+    switch (ev->type) {
         case KeyPress: {
             // printf("KeyPress\n");
             return true;
@@ -559,19 +634,17 @@ static int xevent(XEvent ev)
 
         case ButtonPress: {
             // printf("ButtonPress\n");
-            mouse_down(&root_tree);
+            XButtonEvent *bev = &ev->xbutton;
+            mouse_move(&root_tree, 0, 0, osk.w, osk.h, bev->x, bev->y, 0);
+            mouse_down(&root_tree, 0);
 
-            XButtonEvent *bev = &ev.xbutton;
             if (bev->x >= osk.w - 80) {
                 osk_jump(bev->window, bev->y <= osk.h / 2);
                 return true;
             }
 
-            if (bev->x <= 80 && bev->y <= 80) {
-                return true;
-            }
-
             if (bev->x <= 80 && bev->y >= osk.h - 80) {
+                // exit command
                 return -1;
             }
 
@@ -580,26 +653,17 @@ static int xevent(XEvent ev)
 
         case ButtonRelease: {
             // printf("ButtonRelease\n");
-
-            XButtonEvent *bev = &ev.xbutton;
-            if (bev->x <= 80 && bev->y <= 80) {
-                osk_hide(bev->window);
-                break;
-            }
-
+            XButtonEvent *bev = &ev->xbutton;
+            mouse_move(&root_tree, 0, 0, osk.w, osk.h, bev->x, bev->y, 0);
+            mouse_up(&root_tree, 0);
             return true;
         }
 
         case MotionNotify: {
-            // printf("Motion %i, %i \n", ev.xmotion.x, ev.xmotion.y);
-            mouse_move(&root_tree, 0, 0, osk.w, osk.h, ev.xmotion.x, ev.xmotion.y);
+            // printf("Motion %i, %i \n", ev->xmotion.x, ev->xmotion.y);
+            mouse_move(&root_tree, 0, 0, osk.w, osk.h, ev->xmotion.x, ev->xmotion.y, 0);
             return true;
         }
-
-        // case : {
-        //     printf("\n");
-        //     return true;
-        // }
 
         case EnterNotify: {
             // printf("EnterNotify\n");
@@ -610,7 +674,6 @@ static int xevent(XEvent ev)
             // printf("LeaveNotify\n");
             return true;
         }
-
 
         case FocusIn: {
             // printf("FocusIn\n");
@@ -629,7 +692,7 @@ static int xevent(XEvent ev)
 
         case MapNotify: {
             // printf("MapNotify\n");
-            break;
+            return true;
         }
 
         case MappingNotify: {
@@ -642,8 +705,52 @@ static int xevent(XEvent ev)
             return true;
         }
 
+        case GenericEvent: {
+            // Probably a touchscreen event
+            if (XGetEventData(display, (XGenericEventCookie*)ev)) {
+                XGenericEventCookie *cookie = &ev->xcookie;
+                XIDeviceEvent *touch = cookie->data;
+                XITouchOwnershipEvent *own = cookie->data;
+                switch (cookie->evtype) {
+                    case XI_TouchBegin: {
+                        printf("touch begin  touch_id %02i device_id %04i source_id %u  event xy %04f %04f \n",
+                                touch->detail, touch->deviceid, touch->sourceid, touch->event_x, touch->event_y);
+                        mouse_move(&root_tree, 0, 0, osk.w, osk.h, touch->event_x, touch->event_y, touch->detail);
+                        mouse_down(&root_tree, touch->detail);
+                        break;
+                    }
+                    case XI_TouchUpdate: {
+                        printf("touch update touch_id %02i device_id %04i source_id %u  event xy %04f %04f \n",
+                                touch->detail, touch->deviceid, touch->sourceid, touch->event_x, touch->event_y);
+                        mouse_move(&root_tree, 0, 0, osk.w, osk.h, touch->event_x, touch->event_y, touch->detail);
+                        break;
+                    }
+                    case XI_TouchEnd: {
+                        printf("touch end    touch_id %02i device_id %04i source_id %u  event xy %04f %04f \n",
+                                touch->detail, touch->deviceid, touch->sourceid, touch->event_x, touch->event_y);
+                        mouse_move(&root_tree, 0, 0, osk.w, osk.h, touch->event_x, touch->event_y, touch->detail);
+                        mouse_up(&root_tree, touch->detail);
+                        break;
+                    }
+                    case XI_TouchOwnership: {
+                        printf("Ownership \n");
+                        printf("touch_id %04i device_id %04i source_id %u type %02i\n",
+                               own->touchid, own->deviceid, own->sourceid, own->evtype);
+                        break;
+                    }
+                    default: {
+                        printf("Unknown cookie event\n");
+                        break;
+                    }
+                }
+
+                XFreeEventData(display, (XGenericEventCookie*)ev);
+            }
+            return true;
+        }
+
         default: {
-            // printf("Event Type: %u\n", ev.type);
+            printf("Event Type: %u\n", ev->type);
             return false;
         }
     }
@@ -724,10 +831,54 @@ static Window window_init(void)
     return win;
 }
 
-int main (void) {
+void xlib_query_devices(void)
+{
+    int ndevices;
+    XIDeviceInfo *info = XIQueryDevice(display, XIAllDevices, &ndevices);
 
+    for (int i = 0; i < ndevices; i++) {
+        XIDeviceInfo *dev = &info[i];
+        printf("Device name %s\n", dev->name);
+        for (int j = 0; j < dev->num_classes; j++) {
+            XIAnyClassInfo *class = dev->classes[j];
+            XITouchClassInfo *t = (XITouchClassInfo*)class;
+
+            if (class->type != XITouchClass) {
+                continue;
+            }
+
+            printf("    %s touch device, supporting %d touches.\n",
+                   (t->mode == XIDirectTouch) ?  "direct" : "dependent",
+                   t->num_touches);
+        }
+    }
+}
+
+void xlib_touch_init(void)
+{
+    XIEventMask mask;
+
+    memset(&mask, 0, sizeof(XIEventMask));
+    mask.deviceid = XIAllMasterDevices;
+    mask.mask_len = XIMaskLen(XI_LASTEVENT);
+    mask.mask = (unsigned char*) calloc(mask.mask_len, sizeof(char));
+
+    XISetMask(mask.mask, XI_TouchOwnership);
+    XISetMask(mask.mask, XI_TouchBegin);
+    XISetMask(mask.mask, XI_TouchUpdate);
+    XISetMask(mask.mask, XI_TouchEnd);
+
+    XISelectEvents(display, osk.window, &mask, 1);
+
+    free(mask.mask);
+}
+
+int main (void) {
     xlib_init();
     osk.window = window_init();
+
+    xlib_query_devices();
+    xlib_touch_init();
 
     XIM xim;
     if ((xim = XOpenIM(display, 0, 0, 0)) == NULL) {
@@ -753,13 +904,11 @@ int main (void) {
         XEvent event;
         XNextEvent(display, &event);
 
-        int r = xevent(event);
+        int r = xevent(&event);
         if (r < 0) {
             break;
         } else if (r) {
             draw_tree(&root_tree, 0, 0, osk.w, osk.h);
-        } else {
-            printf("clean event\n");
         }
 
         if (XPending(display)) {

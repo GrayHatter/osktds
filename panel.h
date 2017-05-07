@@ -9,11 +9,12 @@ typedef enum {
 
     OSKTDS_PANEL_TYPE_BOX,
     OSKTDS_PANEL_TYPE_LAYOUT,
+
     OSKTDS_PANEL_TYPE_KEY_ROW,
     OSKTDS_PANEL_TYPE_KEY,
 
+    OSKTDS_PANEL_TYPE_BUTTON,
     OSKTDS_PANEL_TYPE_MODAL,
-
     OSKTDS_PANEL_TYPE_NOS,
 } OSKTDS_PANEL_TYPE;
 
@@ -32,6 +33,7 @@ struct panel {
     void (*draw_func)(PANEL *, int, int, int, int);
 
     bool m_over;
+    int m_over_tid;
     bool (*mdown_func)(PANEL *);
 
     PANEL **child;

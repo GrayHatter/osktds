@@ -596,7 +596,7 @@ OSK_key_bksp = {
     .h = OSKTDS_KEYSIZE,
 
     .type = OSKTDS_PANEL_TYPE_KEY,
-    .type_data = 0,
+    .type_data = XK_BackSpace,
 
     .enabled = true,
     .draw_func = NULL,
